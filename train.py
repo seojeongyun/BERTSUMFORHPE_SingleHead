@@ -42,6 +42,7 @@ if __name__ == '__main__':
     parser.add_argument("-task", default='ext', type=str, choices=['ext', 'abs'])
     parser.add_argument("-encoder", default='baseline', type=str, choices=['bert', 'baseline'])
     parser.add_argument("-mode", default='validate', type=str, choices=['train', 'train-valid', 'validate', 'test'])
+    parser.add_argument("-bert_validate_ckpt", default='/storage/jysuh/BERTSUMFORHPE/checkpoint/BR_44_arc.pt')
     parser.add_argument("-emb_mode", default=config.EMB_MODE, choices=['RELATIVE_BASIS', 'RELATIVE', 'BASIS'])
     # parser.add_argument("-bert_data_path", default='./bert_data/')
     parser.add_argument("-model_path", default='./model_save/')
@@ -135,6 +136,7 @@ if __name__ == '__main__':
     parser.add_argument("-pad_id", default=0, type=int)
     parser.add_argument("-sep_id", default=1, type=int)
     parser.add_argument("-weight_path", default='./model_save/embedding_weights/[new]nn_embedding_model.pt')
+
     ##############################
 
     parser.add_argument("-bert_random_init", default=False)
