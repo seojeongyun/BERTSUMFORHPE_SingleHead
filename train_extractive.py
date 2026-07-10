@@ -122,8 +122,8 @@ def validate_ext(args, config, device_id):
             step = int(cp.split('.')[-2].split('_')[-1])
             # test_ext(args, device_id, cp, step)
     else:
-        ckpt_path = '/home/jysuh/PycharmProjects/ex_cls_test/BERTSUMFORHPE/model_save/BR_44_arc.pt'
-        validate(args, config, device_id, ckpt_path)
+        ckpt_path = args.bert_validate_ckpt
+        xent = validate(args, config, device_id, ckpt_path)
 
 
 def validate(args, config, device_id, pt):
