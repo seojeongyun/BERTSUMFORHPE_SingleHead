@@ -31,7 +31,7 @@ config.SEED = 478
 config.T_DATA_PATH = '/storage/jysuh/BERTSUMFORHPE/embedder_dataset/train.pkl'
 config.T_VOCAB_PATH = '/storage/jysuh/BERTSUMFORHPE/embedder_dataset/train_vocab.pkl'
 # config.V_DATA_PATH = '/storage/jysuh/BERTSUMFORHPE/embedder_dataset/valid.pkl'
-config.V_DATA_PATH = '/home/jysuh/PycharmProjects/ex_cls_test/BERT_Demo_dataset.pkl'
+config.V_DATA_PATH = '/storage/jysuh/BERTSUMFORHPE/embedder_dataset/BERT_Demo_dataset.pkl'
 config.V_VOCAB_PATH = '/storage/jysuh/BERTSUMFORHPE/embedder_dataset/valid_vocab.pkl'
 
 #
