@@ -38,7 +38,7 @@ class Video_Loader(Dataset):
         return video, workout_class
 
     def collate_fn(self, batch):
-        videos, exercise_name, _ = zip(*batch)
+        videos, exercise_name = zip(*batch)
         exercise_name = torch.tensor(exercise_name) - 22
         return videos, exercise_name
         # return videos, exercise_name
