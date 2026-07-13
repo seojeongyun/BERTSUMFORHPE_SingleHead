@@ -66,20 +66,29 @@ class Embedder(nn.Module):
             self.atfc = nn.ReLU()
         #
         # Arcface train
+        params = []
+        self.optimizer = None
+        self.scheduler = None
         if self.config.USE_ARCFACE:
-            params = []
             self.weight = nn.Parameter(
-                torch.empty(self.config.NUM_JOINTS - 2, self.out_features, device=self.config.DEVICE))
+                torch.empty(self.config.NUM_JOINTS - 2,
+                            self.out_features,
+                            device=self.config.DEVICE))
             params += [self.weight]
             nn.init.xavier_normal_(self.weight)
-            if self.config.EMB_MODE != 'BASIS':
-                params += list(self.layers.parameters())
-            if self.use_embedding and (not config.BASIS_FREEZE):
-                params += list(self.embedding.parameters())
-
             self.criterion = nn.CrossEntropyLoss()
+
+        if self.config.EMB_MODE != 'BASIS' and not self.config.RELATIVE_FREEZE:
+            params += list(self.layers.parameters())
+        if self.use_embedding and not self.config.BASIS_FREEZE:
+            params += list(self.embedding.parameters())
+
+        if params:
             self.optimizer = torch.optim.AdamW(params, lr=5e-4)
-            self.scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=0.93)
+
+        if self.config.USE_ARCFACE:
+            self.scheduler = torch.optim.lr_scheduler.ExponentialLR(
+                self.optimizer, gamma=0.93)
             self.losses = AverageMeter()
 
     def get_vocab_path(self):
@@ -102,7 +111,8 @@ class Embedder(nn.Module):
                     pretrained_emb_weight = self.cp['embedder_state_dict']['embedding.weight']
                     self.embedding.weight.data.copy_(pretrained_emb_weight)
                 else:
-                    pretrained_emb_weight = torch.load(self.config.PRETRAINED_EMB_PATH)
+                    pretrained_emb_weight = torch.load(self.config.PRETRAINED_EMB_PATH,
+                        map_location=self.config.DEVICE)
                     self.embedding.weight.data.copy_(pretrained_emb_weight['weight'])
                 if not config.BASIS_FREEZE:
                     print("The weights of nn_Embedding is UPDATED..!!!")
@@ -141,18 +151,12 @@ class Embedder(nn.Module):
                 if 'layers' in param:
                     if param.startswith('layers.'):
                         state_dict[param[7:]] = pretrained_linear_weight[param]
-                        if not config.RELATIVE_FREEZE:
-                            state_dict[param[7:]].requires_grad = True
-                        else:
-                            state_dict[param[7:]].requires_grad = False
                     else:
                         state_dict[param] = pretrained_linear_weight[param]
-                        if not config.RELATIVE_FREEZE:
-                            state_dict[param].requires_grad = True
-                        else:
-                            state_dict[param].requires_grad = False
 
             self.layers.load_state_dict(state_dict, strict=True)
+            for param in self.layers.parameters():
+                param.requires_grad = not self.config.RELATIVE_FREEZE
 
             self.layers.to(self.config.DEVICE)
             print('Pretrained linear weights loaded successfully.')
@@ -196,7 +200,7 @@ class Embedder(nn.Module):
             joint_info.append(videos[video_idx][str(frame_idx)][joint_name])
             joint_token.append(self.vocab[joint_name])
 
-        joint_info = np.array(joint_info)
+        joint_info = np.array(joint_info, copy=True)[..., :self.in_features]
         joint_info = torch.from_numpy(joint_info).to(self.config.DEVICE)
         joint_token = torch.tensor(joint_token).to(self.config.DEVICE)
         return joint_info, joint_token
