@@ -5,7 +5,10 @@
 from __future__ import division
 
 import argparse
+import json
 import os
+import sys
+from datetime import datetime
 import torch
 import random
 import numpy as np
@@ -35,17 +38,42 @@ def str2bool(v):
         raise argparse.ArgumentTypeError('Boolean value expected.')
 
 
+class TeeStream:
+    """Write stdout/stderr to both the terminal and a log file."""
+
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, message):
+        for stream in self.streams:
+            stream.write(message)
+            stream.flush()
+
+    def flush(self):
+        for stream in self.streams:
+            stream.flush()
+
+    def isatty(self):
+        return False
+
+
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("-task", default='ext', type=str, choices=['ext', 'abs'])
     parser.add_argument("-encoder", default='baseline', type=str, choices=['bert', 'baseline'])
-    parser.add_argument("-mode", default='validate', type=str, choices=['train', 'train-valid', 'validate', 'test'])
+    parser.add_argument("-mode", default='train-valid', type=str, choices=['train', 'train-valid', 'validate', 'test'])
     parser.add_argument("-bert_validate_ckpt", default='/storage/jysuh/BERTSUMFORHPE/checkpoint/BR_44_arc.pt')
     parser.add_argument("-emb_mode", default=config.EMB_MODE, choices=['RELATIVE_BASIS', 'RELATIVE', 'BASIS'])
     # parser.add_argument("-bert_data_path", default='./bert_data/')
     parser.add_argument("-model_path", default='./model_save/')
+    parser.add_argument(
+        "-save_dir",
+        default="/home/jysuh/PycharmProjects/BERTSUMFORHPE_single_head_ver/model_save/test",
+        type=str,
+        help="Base directory for args.json, config.json, train.log and checkpoint files."
+    )
     parser.add_argument("-result_path", default='./results/news')
     parser.add_argument("-temp_dir", default='./temp')
 
@@ -100,7 +128,12 @@ if __name__ == '__main__':
     parser.add_argument("-warmup_steps_dec", default=8000, type=int)
     parser.add_argument("-max_grad_norm", default=0, type=float)
     # Scheduler
-    parser.add_argument("-use_scheduler", default='')
+    parser.add_argument(
+        "-use_scheduler",
+        type=str2bool,
+        nargs='?',
+        const=True,
+        default=False)
     parser.add_argument("-base_lr", default=5e-5)
     parser.add_argument("-max_lr", default=5e-4)
     parser.add_argument("-step_size_up", default=20, type=int)
@@ -114,7 +147,7 @@ if __name__ == '__main__':
     parser.add_argument("-train_steps", default=100, type=int)
     parser.add_argument("-recall_eval", type=str2bool, nargs='?',const=True,default=False)
 
-    parser.add_argument("-device_id", default='1', type=int)
+    parser.add_argument("-device_id", default='0', type=int)
     parser.add_argument('-visible_gpus', default='1', type=str)
     parser.add_argument('-gpu_ranks', default='1', type=str)
     parser.add_argument('-log_file', default=None)
@@ -143,6 +176,26 @@ if __name__ == '__main__':
     parser.add_argument("-embedder_random_init", default=False)
 
     args = parser.parse_args()
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    args.save_dir = os.path.join(args.save_dir, run_id)
+    os.makedirs(args.save_dir, exist_ok=False)
+
+    # Keep legacy code that reads args.model_path on the same output directory.
+    args.model_path = args.save_dir
+
+    train_log_path = os.path.join(args.save_dir, "train.log")
+    train_log_handle = open(
+        train_log_path,
+        mode="a",
+        encoding="utf-8",
+        buffering=1
+    )
+    sys.stdout = TeeStream(sys.__stdout__, train_log_handle)
+    sys.stderr = TeeStream(sys.__stderr__, train_log_handle)
+
+    # The root logger writes to stderr, now also captured by TeeStream.
+    init_logger()
+    print("Run save_dir: {}".format(args.save_dir))
     #
     fix_seed(args.seed)
     #
@@ -160,7 +213,17 @@ if __name__ == '__main__':
     else:
         device = torch.device('cuda:{}'.format(args.device_id))
         torch.cuda.set_device(args.device_id)
+    config.DEVICE = device
 
+    with open(os.path.join(args.save_dir, "args.json"), "w", encoding="utf-8") as f:
+        json.dump(vars(args), f, ensure_ascii=False, indent=2, default=str)
+
+    with open(os.path.join(args.save_dir, "config.json"), "w", encoding="utf-8") as f:
+        json.dump(vars(config), f, ensure_ascii=False, indent=2, default=str)
+
+    print("Arguments saved: {}".format(os.path.join(args.save_dir, "args.json")))
+    print("Config saved: {}".format(os.path.join(args.save_dir, "config.json")))
+    print("Training log: {}".format(train_log_path))
 
 
     if (args.task == 'abs'):
