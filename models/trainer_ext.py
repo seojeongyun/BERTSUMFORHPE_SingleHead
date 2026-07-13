@@ -124,7 +124,7 @@ class Trainer(object):
                 self.pre_weights = nn.Embedding.from_pretrained(self.preweights['weight'], freeze=True).to(self.device)
         elif self.args.emb_mode == 'RELATIVE':
             self.pre_weights = nn.Embedding(22,768).to(self.device)
-        self.segment_emb = nn.Embedding(2, 768).to(self.device)
+
         self.pos_enc = PositionalEncoding(dropout=0.2, dim=768).to(self.device)
         assert grad_accum_count > 0
         # Set model in training mode.
@@ -195,7 +195,7 @@ class Trainer(object):
         full_seg_ids = torch.cat([cls_seg_id, seg_ids_flat]).unsqueeze(0).expand(B, -1)
 
         # Segment Embedding ����
-        seg_emb = self.segment_emb(full_seg_ids)
+        seg_emb = self.model.segment_emb(full_seg_ids)
 
         # -----------------------------------------------------------
         # 3. Positional Encoding (���� ���� ����)
@@ -205,19 +205,12 @@ class Trainer(object):
         # ������ PE�� ����(pe)�� ���� �������� '������ ������ ����'�� ����������.
         # ���� ����: inputs + seg + pos_enc(inputs)
 
-        # 3-1. Scale & Add PE (inputs_embeds ������ ����)
-        # PE ����: x * sqrt(dim) + pe
-        pe_term = inputs_embeds * math.sqrt(self.pos_enc.dim)
-
-        # ������ ������ ���� PE ��������
+        # Add positional encoding without rescaling or duplicating the input embeddings.
         seq_len = inputs_embeds.size(1)
-        pe_term = pe_term + self.pos_enc.pe[:, :seq_len].to(device)
+        pos_emb = self.pos_enc.pe[:, :seq_len].to(device)
 
-        # Dropout ����
-        pos_emb = self.pos_enc.dropout(pe_term)
-
-        # ���� ���� (���� ���� ���� ����: inputs + seg + pos_output)
-        embeddings = inputs_embeds + seg_emb + pos_emb
+        embeddings = self.model.input_layer_norm(inputs_embeds + seg_emb + pos_emb)
+        embeddings = self.model.input_dropout(embeddings)
 
         # -----------------------------------------------------------
         # 4. Padding Mask ����
@@ -229,18 +222,15 @@ class Trainer(object):
         is_pad = torch.all(inputs_embeds == pad_vec, dim=-1)
 
         # ������ ���� (1: Real, 0: Pad)
-        mask_src = (~is_pad).float()
+        mask_src = ~is_pad
 
-        # ���� ����
-        mask = rearrange(mask_src, 'b s -> b 1 1 s')
-        padding_mask = repeat(mask, 'b 1 1 s -> b 1 new s', new=mask_src.shape[-1])
-
-        return embeddings, seg_emb, padding_mask
+        return embeddings, full_seg_ids, mask_src
 
     def train(self, device, train_steps, valid_iter_fct=None, valid_steps=-1):
         training_loss_hist=[]
         training_acc_hist=[]
-
+        best_perf = 0.0
+        best_model = False
         logger.info("Start training...")        #
         print("============== TRAIN START ==============")
         for epoch in range(self.train_epoch):
@@ -324,25 +314,16 @@ class Trainer(object):
                         )
 
                 # UPDATE
-                if self.config.USE_ARCFACE:
+                if self.embedder.optimizer is not None:
                     self.embedder.optimizer.zero_grad()
                 self.optim.optimizer.zero_grad()
                 #
                 total_loss.backward()
 
-                if self.config.USE_ARCFACE:
+                if self.embedder.optimizer is not None:
                     self.embedder.optimizer.step()
                 #
                 self.optim.optimizer.step()
-            end = time.time()
-            epoch_time = end - start
-            throughput = len(self.data_loader) / epoch_time  # samples/sec
-            print(f"Throughput: {throughput:.1f} samples/s")
-
-            #
-            hours, rem = divmod(epoch_time, 3600)
-            minutes, seconds = divmod(rem, 60)
-            print(f"Elapsed time per epoch: {int(hours)}h {int(minutes)}m {seconds:.1f}s")
             #
             avg_train_loss = Train_total_loss / len(self.data_loader)
             Train_accuracy = 100. * Train_correct_predictions / len(self.data_loader.dataset)
@@ -361,10 +342,21 @@ class Trainer(object):
             else:
                 print('[TRAIN] Epoch: {} Average loss: {:.6f}, Accuracy: {:.2f}%'
                       .format(1 + epoch, avg_train_loss, Train_accuracy))
+
+            end = time.time()
+            epoch_time = end - start
+            throughput = len(self.data_loader) / epoch_time  # samples/sec
+            print(f"Throughput: {throughput:.1f} samples/s")
+
+            #
+            hours, rem = divmod(epoch_time, 3600)
+            minutes, seconds = divmod(rem, 60)
+            print(f"Elapsed time per epoch: {int(hours)}h {int(minutes)}m {seconds:.1f}s")
+            #
             training_loss_hist.append(avg_train_loss)
             #
             # Scheduler
-            if self.config.USE_ARCFACE:
+            if self.embedder.scheduler is not None:
                 self.embedder.scheduler.step()
             if self.args.use_scheduler:
                 self.optim.scheduler.step()
@@ -391,7 +383,7 @@ class Trainer(object):
                         if self.config.USE_ARCFACE:
                             output= self.embedder(videos, mode='valid')
                         else:
-                            output = self.embedder(videos)
+                            output = self.embedder(videos, mode='valid')
                         #
                         input_embs, segs, pad_mask = self.emb_(output)
                         tgt = exercise_name.to(device, non_blocking=True)
@@ -411,8 +403,58 @@ class Trainer(object):
                     print('[VALID] Epoch: {}, Accuracy: {:.2f}%'
                           .format(1 + epoch, total_val_acc))
 
+                    if total_val_acc > best_perf:
+                        best_perf = total_val_acc
+                        best_model = True
+                    else:
+                        best_model = False
 
-    def validate(self, video_loader, video_dataset, step=0):
+                ckpt = {
+                    "epoch": epoch + 1,
+                    "val_acc": total_val_acc,
+                    "best_val_acc": best_perf,
+                    "model_state_dict": self.model.state_dict(),
+                    "embedder_state_dict": self.embedder.state_dict(),
+                    "optimizer_state_dict": self.optim.optimizer.state_dict(),
+                    "embedder_optimizer_state_dict": (
+                        self.embedder.optimizer.state_dict()
+                        if self.embedder.optimizer is not None
+                        else None
+                    ),
+                    "model_scheduler_state_dict": (
+                        self.optim.scheduler.state_dict()
+                        if getattr(self.optim, "scheduler", None) is not None
+                        else None
+                    ),
+                    "embedder_scheduler_state_dict": (
+                        self.embedder.scheduler.state_dict()
+                        if self.embedder.scheduler is not None
+                        else None
+                    ),
+                    "args": vars(self.args),
+                }
+
+                if best_model:
+                    checkpoint_path = os.path.join(
+                        self.args.save_dir,
+                        "best_checkpoint.pt"
+                    )
+                    temporary_path = checkpoint_path + ".tmp"
+
+                    # Atomic replacement prevents a partially written best checkpoint.
+                    torch.save(ckpt, temporary_path)
+                    os.replace(temporary_path, checkpoint_path)
+
+                    print(
+                        "Best Model saved: epoch={}, val_acc={:.2f}%, path={}".format(
+                            epoch + 1,
+                            total_val_acc,
+                            checkpoint_path
+                        )
+                    )
+
+
+    def validate(self, video_loader, step=0):
         """Validate model.
             valid_iter: validate data iterator
         Returns:
