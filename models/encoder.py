@@ -10,8 +10,8 @@ class Classifier(nn.Module):
     def __init__(self, hidden_size):
         super(Classifier, self).__init__()
         # ver 1
-        self.linear = nn.Linear(hidden_size, int(hidden_size / 2))
-        self.classifier =nn.Linear(int(hidden_size / 2) ,41)
+        self.linear = nn.Linear(hidden_size, 256)
+        self.classifier =nn.Linear(256 ,41)
         self.act = nn.ReLU()
         self.sigmoid = nn.Sigmoid()
         # ver 2
