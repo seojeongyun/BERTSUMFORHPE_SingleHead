@@ -168,13 +168,21 @@ class Bert(nn.Module):
         self.finetune = finetune
 
     def forward(self, x, segs, mask):
+        extended_mask = (1.0 - mask[:, None, None, :].to(dtype=x.dtype)) * -10000.0
         if(self.finetune):
-            self.encoder = self.model.encoder
-            top_vec = self.encoder(x, attention_mask=mask,return_dict=False)
+            # self.encoder = self.model.encoder
+            # top_vec = self.encoder(x, attention_mask=mask,return_dict=False)
+            top_vec = self.model.encoder(
+                x,
+                attention_mask=extended_mask,
+                return_dict=False)
         else:
             self.eval()
             with torch.no_grad():
-                top_vec, _ = self.model(x, token_type_ids=segs, attention_mask=mask)
+                top_vec = self.model.encoder(
+                    x,
+                    attention_mask=extended_mask,
+                    return_dict=False)
         return top_vec[0]
 
 
@@ -193,6 +201,11 @@ class ExtSummarizer(nn.Module):
                                      intermediate_size=args.ext_ff_size)
             self.bert.model = BertModel(bert_config).to(device)
             self.ext_layer = Classifier(self.bert.model.config.hidden_size).to(device)
+
+        hidden_size = self.bert.model.config.hidden_size
+        self.segment_emb = nn.Embedding(2, hidden_size).to(device)
+        self.input_layer_norm = nn.LayerNorm(hidden_size).to(device)
+        self.input_dropout = nn.Dropout(args.ext_dropout).to(device)
 
         if (args.max_pos > 512):
             my_pos_embeddings = nn.Embedding(args.max_pos, self.bert.model.config.hidden_size)
@@ -219,7 +232,7 @@ class ExtSummarizer(nn.Module):
                         xavier_uniform_(p)
         self.register_buffer('pad_id', torch.tensor(args.pad_id, dtype=torch.long))
         self.register_buffer('sep_id', torch.tensor(args.sep_id, dtype=torch.long))
-        self.register_buffer('cls_emb', torch.zeros(768))
+        self.register_buffer('cls_emb', torch.zeros(hidden_size))
         self.to(device)
 
     def forward(self, src, segs, mask):
