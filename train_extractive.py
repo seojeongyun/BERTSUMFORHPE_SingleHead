@@ -184,8 +184,8 @@ def validate(args, config, device_id, pt):
         collate_fn=video_dataset.collate_fn)
 
     trainer = build_trainer(args, config, device_id, model, None, checkpoint)
-    stats = trainer.validate(video_loader, video_dataset)
-    return stats.xent()
+    print(f"Checkpoint Acc: {checkpoint['val_acc']}")
+    stats = trainer.validate(video_loader)
 
 
 def test_ext(args, device_id, pt, step):
